@@ -9,7 +9,7 @@
 # writes causing unnecesary writes or affecting replication.
 
 
-import re
+import re, sys, pdb
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
     DeleteRowsEvent,
@@ -17,12 +17,13 @@ from pymysqlreplication.row_event import (
     WriteRowsEvent,
 )
 from datetime import (timedelta, datetime)
+#from pudb import set_trace; set_trace()
 
 #from collections import defaultDict()
 
 MYSQL_SETTINGS = {
     "host": "127.0.0.1",
-    "port": 3306,
+    "port": 22695,
     "user": "msandbox",
     "passwd": "msandbox"
 }
@@ -33,8 +34,10 @@ MYSQL_SETTINGS = {
 # using a database in memory manageable datastore.
 
 OPTIONS = {
-    "interval": "10", # in seconds
-    "serverid": "3"
+    "interval": 10, # in seconds
+    "serverid": 3,
+    "log_file": "",
+    "log_pos": 4
     #"pattern": "http?:\/\/(.*)\s?" # data pattern to search
 }
 
@@ -59,24 +62,23 @@ def calculateStats():
 
 def printStats():
     # Print Top Operations
-    calculateStats()
+    #calculateStats()
 
-    countTopN = 0
-    for key in opsGeneralCollector:
-        countTopN += 1
-        print(key, opsGeneralCollector[key])
-        if countTopN >= topN:
-            break
+    #countTopN = 0
+    #for key in opsGeneralCollector:
+    #    countTopN += 1
+    #    print(key, opsGeneralCollector[key])
+    #    if countTopN >= topN:
+    #        break
 
-    countTopN = 0
-    for key in patternGeneralCollector:
-        countTopN += 1
-        print(key, patternGeneralCollector[key])
-        if countTopN >= topN:
-            break
+    #countTopN = 0
+    #for key in patternGeneralCollector:
+    #    countTopN += 1
+    #    print(key, patternGeneralCollector[key])
+    #    if countTopN >= topN:
+    #        break
 
-    print "Total ops: %s , Ops collected: %s, Pattern occurrences: %s " %
-        (totalOps,countOps,countPatterns)
+    print "Total ops: %s , Ops collected: %s, Pattern occurrences: %s " % (totalOps,countOps,countPatterns)
 
 
 def main():
@@ -86,58 +88,55 @@ def main():
 
     # We always want to use MASTER_AUTO_POSITION = 1
     # Only events help us to keep the stream shorter as we can.
-    try:
-        stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
-                                    server_id=OPTIONS.serverid,
-                                    blocking=True,
-                                    only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
-    else:
-        exit()
+    stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
+                                server_id=3 ,#OPTIONS["serverid"],
+                                #blocking=True,
+                                only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
 
     timeCheck = datetime.today()  # If event is bigger, sets it to now() and prints stats.
+    print "Starting at %s " % (timeCheck)
 
     for binlogevent in stream:
+        #binlogevent.dump()
+        #print "DEBUG %s " % binlogevent
         # Table schema and table are split with __ instead .?
-        table = "%s.%s" % (binlogevent.schema, binlogevent.table)
+        #table = "%s.%s" % (binlogevent.schema, binlogevent.table)
 
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
                 vals = row["values"]
-                #r.delete(prefix + str(vals["id"]))
             elif isinstance(binlogevent, UpdateRowsEvent):
                 vals = row["after_values"]
-                #r.hmset(prefix + str(vals["id"]), vals)
             elif isinstance(binlogevent, WriteRowsEvent):
                 vals = row["values"]
-                #r.hmset(prefix + str(vals["id"]), vals)
 
-            occurrence = search(patternC, str(vals) )
-            if  occurrence:
-                patternCollector = "%s__%s__%s.%s" % (
-                                        binlogevent,
-                                        occurrence.group(),
-                                        binlogevent.schema, binlogevent.table,
-                                        )
+        #    occurrence = search(patternC, str(vals) )
+        #    if  occurrence:
+        #        patternCollector = "%s__%s__%s.%s" % (
+        #                                binlogevent,
+        #                                occurrence.group(),
+        #                                binlogevent.schema, binlogevent.table,
+        #                                )
 
-            tableCollector = "%s__g__%s.%s" % (
-                                    binlogevent,
-                                    binlogevent.schema, binlogevent.table,
-                                    )
+        #    tableCollector = "%s__g__%s.%s" % (
+        #                            binlogevent,
+        #                            binlogevent.schema, binlogevent.table,
+        #                            )
 
-            patternGeneralCollector[patternCollector] += 1
-            generalCollector[tableCollector] += 1
-            totalOps += 1
+        patternGeneralCollector[patternCollector] += 1
+        generalCollector[tableCollector] += 1
+        totalOps += 1
 
+        printStats()
         # If interval has been committed, print stats and reset everything
-        if (datetime.today() + timedelta(seconds=OPTIONS.interval)) < timeCheck:
-            printStats()
-            # Reset everything to release memory
-            totalOps = 0
-            patternGeneralCollector = {}
-            generalCollector = {}
-            timeCheck = datetime.today()
-
-        # binlogevent.dump()
+        #if (datetime.today() + timedelta(seconds=OPTIONS["interval"])) > timeCheck:
+        #    print "Entering line stats at %s " % (timeCheck)
+        #   printStats()
+        ## Reset everything to release memory
+        #    totalOps = 0
+        #    patternGeneralCollector = {}
+        #    generalCollector = {}
+        #    timeCheck = datetime.today()
 
     stream.close()
 
