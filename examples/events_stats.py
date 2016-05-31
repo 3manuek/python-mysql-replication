@@ -36,7 +36,7 @@ MYSQL_SETTINGS = {
 OPTIONS = {
     "interval": 10, # in seconds
     "serverid": 3,
-    "log_file": "",
+    "log_file": "mysql-bin.000001",
     "log_pos": 4
     #"pattern": "http?:\/\/(.*)\s?" # data pattern to search
 }
@@ -85,23 +85,17 @@ def main():
     # server_id is your slave identifier, it should be unique.
     # set blocking to True if you want to block and wait for the next event at
     # the end of the stream
-
+    timeCheck = datetime.today()  # If event is bigger, sets it to now() and prints stats.
+    print "Starting at %s " % (timeCheck)
     # We always want to use MASTER_AUTO_POSITION = 1
     # Only events help us to keep the stream shorter as we can.
     stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
                                 server_id=3 ,#OPTIONS["serverid"],
-                                #blocking=True,
+                                log_file=OPTIONS["log_file"],
+                                #auto_position=1,
+                                blocking=True,
                                 only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
-
-    timeCheck = datetime.today()  # If event is bigger, sets it to now() and prints stats.
-    print "Starting at %s " % (timeCheck)
-
     for binlogevent in stream:
-        #binlogevent.dump()
-        #print "DEBUG %s " % binlogevent
-        # Table schema and table are split with __ instead .?
-        #table = "%s.%s" % (binlogevent.schema, binlogevent.table)
-
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
                 vals = row["values"]
@@ -109,7 +103,6 @@ def main():
                 vals = row["after_values"]
             elif isinstance(binlogevent, WriteRowsEvent):
                 vals = row["values"]
-
         #    occurrence = search(patternC, str(vals) )
         #    if  occurrence:
         #        patternCollector = "%s__%s__%s.%s" % (
