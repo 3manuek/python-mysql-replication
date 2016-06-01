@@ -22,8 +22,9 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     WriteRowsEvent,
 )
-from datetime import (timedelta, datetime)
-#from pudb import set_trace
+#from datetime import (timedelta, datetime)
+import time
+from pudb import set_trace
 
 #from collections import defaultDict()
 
@@ -54,8 +55,8 @@ def calculateStats():
     # Top N operation or top 30%/20% ops
     # Estimate variance
     # Last 5, 10 , 15 "load average style"
-    countOps = count(opsGeneralCollector)
-    countPatterns = count(patternGeneralCollector)
+    countOps = len(opsGeneralCollector)
+    countPatterns = len(patternGeneralCollector)
 
     patternGeneralCollector = sorted(patternGeneralCollector, reverse = True)
     opsGeneralCollector = sorted(opsGeneralCollector, reverse = True)
@@ -63,21 +64,21 @@ def calculateStats():
 
 def printStats():
     # Print Top Operations
-    #calculateStats()
+    countTopN = 0
+    topN = 10
+    for key in opsGeneralCollector:
+        countTopN += 1
+        print(key, opsGeneralCollector[key])
+        if countTopN >= topN:
+            break
 
-    #countTopN = 0
-    #for key in opsGeneralCollector:
-    #    countTopN += 1
-    #    print(key, opsGeneralCollector[key])
-    #    if countTopN >= topN:
-    #        break
+    countTopN = 0
+    for key in patternGeneralCollector:
+        countTopN += 1
+        print(key, patternGeneralCollector[key])
+        if countTopN >= topN:
+            break
 
-    #countTopN = 0
-    #for key in patternGeneralCollector:
-    #    countTopN += 1
-    #    print(key, patternGeneralCollector[key])
-    #    if countTopN >= topN:
-    #        break
     print "Total ops: %s , Ops collected: %s, Pattern occurrences: %s " % (totalOps,countOps,countPatterns)
 
 
@@ -88,13 +89,14 @@ def main():
     global countOps
     global countPatterns
     global patternC
-    global generalCollector
+    #global generalCollector
     patternGeneralCollector = {}
     opsGeneralCollector = {}
-    generalCollector = {}
+    #generalCollector = {}
     totalOps = 0 # Reset on each interval
     countOps = 0
     countPatterns = 0
+    prevTimeFlag = 0
 
     # Great resource http://blog.mattheworiordan.com/post/13174566389/url-regular-expression-for-links-with-or-without
     patternC = re.compile(r'http?:\/\/(?:[A-Za-z0-9\.\-]+)')
@@ -102,7 +104,8 @@ def main():
     # server_id is your slave identifier, it should be unique.
     # set blocking to True if you want to block and wait for the next event at
     # the end of the stream
-    timeCheck = datetime.today()  # If event is bigger, sets it to now() and prints stats.
+    #timeCheck = datetime.today()  # If event is bigger, sets it to now() and prints stats.
+    timeCheck = time.time()
     print "Starting at %s " % (timeCheck)
     # We always want to use MASTER_AUTO_POSITION = 1
     # Only events help us to keep the stream shorter as we can.
@@ -116,6 +119,10 @@ def main():
     for binlogevent in stream:
         patternCollector = None
         occurrence = None
+        if prevTimeFlag == 0:
+            txTimeCheck = binlogevent.timestamp
+            prevTimeFlag = 1
+
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
                 vals = row["values"]
@@ -130,9 +137,6 @@ def main():
             occurrence = re.search(patternC, str(vals) )
             if  occurrence:
                 occurrence_ = (occurrence.group()).strip('http?://')
-                print occurrence
-                print occurrence_
-                print occurrence.group()
                 patternCollector = "%s__%s__%s_%s" % (
                                         eventType,
                                         occurrence_, #.group(),
@@ -143,31 +147,34 @@ def main():
                                     eventType,
                                     binlogevent.schema, binlogevent.table,
                                     )
+
         if patternCollector:
             if patternCollector in patternGeneralCollector.keys():
-                patternGeneralCollector[patternCollector] = 1
-            else:
                 patternGeneralCollector[patternCollector] += 1
+            else:
+                patternGeneralCollector[patternCollector] = 1
 
-        if tableCollector in generalCollector.keys():
-            generalCollector[tableCollector] += 1
+        if tableCollector in opsGeneralCollector.keys():
+            opsGeneralCollector[tableCollector] += 1
+            #countOps += 1
         else:
-            generalCollector[tableCollector] = 1
+            opsGeneralCollector[tableCollector] = 1
+            #countOps += 1
 
-        if totalOps is None:
-            totalOps = 1
-        else:
-            totalOps += 1
+        totalOps += 1
 
         # If interval has been committed, print stats and reset everything
-        if (datetime.today() + timedelta(seconds=OPTIONS["interval"])) < timeCheck:
-            print "Entering line stats at %s " % (timeCheck)
+        if (timeCheck + OPTIONS["interval"]) < time.time() or txTimeCheck + OPTIONS["interval"] > time.time():
+            #print "Entering line stats at %s " % (timeCheck)
+            #calculateStats()
             printStats()
             ## Reset everything to release memory
             totalOps = 0
             patternGeneralCollector = {}
             generalCollector = {}
-            timeCheck = datetime.today()
+            timeCheck = time.time()
+            #txTimeCheck = binlogevent.timestamp
+            prevTimeFlag = 0
 
     stream.close()
 
