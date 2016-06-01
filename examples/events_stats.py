@@ -7,9 +7,15 @@
 #
 # Useful for a logical stream metrics for debugging application
 # writes causing unnecesary writes or affecting replication.
+#
+# Currently only compatible with binlog_format = ROW
+# For statement, instead iterate over rows, we should do:
+#
+#    for binlogevent in stream:
+#        if isinstance(binlogevent, QueryEvent):
+#            print binlogevent.query
 
-
-import re, sys, pdb
+import re, sys
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
     DeleteRowsEvent,
@@ -17,7 +23,7 @@ from pymysqlreplication.row_event import (
     WriteRowsEvent,
 )
 from datetime import (timedelta, datetime)
-#from pudb import set_trace; set_trace()
+#from pudb import set_trace
 
 #from collections import defaultDict()
 
@@ -36,17 +42,12 @@ MYSQL_SETTINGS = {
 OPTIONS = {
     "interval": 10, # in seconds
     "serverid": 3,
-    "log_file": "mysql-bin.000001",
+    "log_file": "mysql-bin.000002",
     "log_pos": 4
     #"pattern": "http?:\/\/(.*)\s?" # data pattern to search
 }
 
-patternGeneralCollector = {}
-opsGeneralCollector = {}
-totalOps = 0 # Reset on each interval
-countOps = 0
-countPatterns = 0
-patternC = re.compile(r'http?:\/\/(.*)\s?')
+
 # find a way to avoid occurrence.strip('/:')
 
 def calculateStats():
@@ -77,11 +78,25 @@ def printStats():
     #    print(key, patternGeneralCollector[key])
     #    if countTopN >= topN:
     #        break
-
     print "Total ops: %s , Ops collected: %s, Pattern occurrences: %s " % (totalOps,countOps,countPatterns)
 
 
 def main():
+    global patternGeneralCollector
+    global opsGeneralCollector
+    global totalOps # Reset on each interval
+    global countOps
+    global countPatterns
+    global patternC
+    global generalCollector
+    patternGeneralCollector = {}
+    opsGeneralCollector = {}
+    generalCollector = {}
+    totalOps = 0 # Reset on each interval
+    countOps = 0
+    countPatterns = 0
+    patternC = re.compile(r'http?:\/\/(.*)\s?')
+
     # server_id is your slave identifier, it should be unique.
     # set blocking to True if you want to block and wait for the next event at
     # the end of the stream
@@ -90,46 +105,63 @@ def main():
     # We always want to use MASTER_AUTO_POSITION = 1
     # Only events help us to keep the stream shorter as we can.
     stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
-                                server_id=3 ,#OPTIONS["serverid"],
+                                server_id=OPTIONS["serverid"],
                                 log_file=OPTIONS["log_file"],
                                 #auto_position=1,
                                 blocking=True,
                                 only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
+
     for binlogevent in stream:
+        patternCollector = None
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
                 vals = row["values"]
+                eventType = "delete"
             elif isinstance(binlogevent, UpdateRowsEvent):
                 vals = row["after_values"]
+                eventType = "update"
             elif isinstance(binlogevent, WriteRowsEvent):
                 vals = row["values"]
-        #    occurrence = search(patternC, str(vals) )
-        #    if  occurrence:
-        #        patternCollector = "%s__%s__%s.%s" % (
-        #                                binlogevent,
-        #                                occurrence.group(),
-        #                                binlogevent.schema, binlogevent.table,
-        #                                )
+                eventType = "insert"
 
-        #    tableCollector = "%s__g__%s.%s" % (
-        #                            binlogevent,
-        #                            binlogevent.schema, binlogevent.table,
-        #                            )
+            occurrence = re.search(patternC, str(vals) )
+            if  occurrence:
+                patternCollector = "%s__%s__%s_%s" % (
+                                        binlogevent,
+                                        occurrence.group(),
+                                        binlogevent.schema, binlogevent.table,
+                                        )
 
-        patternGeneralCollector[patternCollector] += 1
-        generalCollector[tableCollector] += 1
-        totalOps += 1
+            tableCollector = "%s__g__%s_%s" % (
+                                    eventType,
+                                    binlogevent.schema, binlogevent.table,
+                                    )
+        if patternCollector:
+            if patternGeneralCollector[patternCollector] is None:
+                patternGeneralCollector[patternCollector] = 1
+            else:
+                patternGeneralCollector[patternCollector] += 1
+
+        if generalCollector[tableCollector]:
+            generalCollector[tableCollector] += 1
+        else:
+            generalCollector[tableCollector] = 1
+
+        if totalOps is None:
+            totalOps = 1
+        else:
+            totalOps += 1
 
         printStats()
         # If interval has been committed, print stats and reset everything
-        #if (datetime.today() + timedelta(seconds=OPTIONS["interval"])) > timeCheck:
-        #    print "Entering line stats at %s " % (timeCheck)
-        #   printStats()
-        ## Reset everything to release memory
-        #    totalOps = 0
-        #    patternGeneralCollector = {}
-        #    generalCollector = {}
-        #    timeCheck = datetime.today()
+        if (datetime.today() + timedelta(seconds=OPTIONS["interval"])) > timeCheck:
+            print "Entering line stats at %s " % (timeCheck)
+            printStats()
+            ## Reset everything to release memory
+            totalOps = 0
+            patternGeneralCollector = {}
+            generalCollector = {}
+            timeCheck = datetime.today()
 
     stream.close()
 

@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 
 #
-# Update a redis server cache when an evenement is trigger
-# in MySQL replication log
+# Using the replication to build a write logical metrics
+#
 #
 
-#import redis
+import redis
 
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
@@ -17,18 +17,17 @@ from pymysqlreplication.row_event import (
 
 MYSQL_SETTINGS = {
     "host": "127.0.0.1",
-    "port": 22695,
-    "user": "msandbox",
-    "passwd": "msandbox"
+    "port": 3306,
+    "user": "root",
+    "passwd": ""
 }
 
 
 def main():
-    #r = redis.Redis()
+    r = redis.Redis()
 
     stream = BinLogStreamReader(
         connection_settings=MYSQL_SETTINGS,
-        server_id=4,
         only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
 
     for binlogevent in stream:
@@ -37,14 +36,13 @@ def main():
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
                 vals = row["values"]
-                #r.delete(prefix + str(vals["id"]))
+                r.delete(prefix + str(vals["id"]))
             elif isinstance(binlogevent, UpdateRowsEvent):
                 vals = row["after_values"]
-                #r.hmset(prefix + str(vals["id"]), vals)
+                r.hmset(prefix + str(vals["id"]), vals)
             elif isinstance(binlogevent, WriteRowsEvent):
                 vals = row["values"]
-                #r.hmset(prefix + str(vals["id"]), vals)
-        print vals
+                r.hmset(prefix + str(vals["id"]), vals)
 
     stream.close()
 

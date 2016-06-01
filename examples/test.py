@@ -6,6 +6,17 @@
 #
 
 from pymysqlreplication import BinLogStreamReader
+from pymysqlreplication.row_event import (
+    DeleteRowsEvent,
+    UpdateRowsEvent,
+    WriteRowsEvent
+)
+from pymysqlreplication.event import (
+    QueryEvent, RotateEvent, FormatDescriptionEvent,
+    XidEvent, GtidEvent, StopEvent,
+    BeginLoadQueryEvent, ExecuteLoadQueryEvent,
+    NotImplementedEvent
+)
 
 MYSQL_SETTINGS = {
     "host": "127.0.0.1",
@@ -21,11 +32,17 @@ def main():
     # the end of the stream
     stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
                                 server_id=3,
-                                blocking=True,
-                                only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
+                                blocking=True)
 
     for binlogevent in stream:
-        binlogevent.dump()
+        #print binlogevent
+        #if isinstance(binlogevent, QueryEvent):
+        #    print binlogevent.query
+        if isinstance(binlogevent, WriteRowsEvent):
+            for rows in binlogevent.rows:
+                print rows
+                #print binlogevent.query
+        #binlogevent.dump()
 
     stream.close()
 

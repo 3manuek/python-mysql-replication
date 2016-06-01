@@ -6,6 +6,12 @@
 #
 
 from pymysqlreplication import BinLogStreamReader
+from pymysqlreplication.row_event import (
+    DeleteRowsEvent,
+    UpdateRowsEvent,
+    WriteRowsEvent,
+)
+
 
 MYSQL_SETTINGS = {
     "host": "127.0.0.1",
@@ -21,6 +27,7 @@ def main():
     # the end of the stream
     stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
                                 server_id=3,
+                                log_file="mysql-bin.000002",
                                 blocking=True,
                                 only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
 
