@@ -95,7 +95,9 @@ def main():
     totalOps = 0 # Reset on each interval
     countOps = 0
     countPatterns = 0
-    patternC = re.compile(r'http?:\/\/(.*)\s?')
+
+    # Great resource http://blog.mattheworiordan.com/post/13174566389/url-regular-expression-for-links-with-or-without
+    patternC = re.compile(r'http?:\/\/(?:[A-Za-z0-9\.\-]+)')
 
     # server_id is your slave identifier, it should be unique.
     # set blocking to True if you want to block and wait for the next event at
@@ -113,6 +115,7 @@ def main():
 
     for binlogevent in stream:
         patternCollector = None
+        occurrence = None
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
                 vals = row["values"]
@@ -126,9 +129,13 @@ def main():
 
             occurrence = re.search(patternC, str(vals) )
             if  occurrence:
+                occurrence_ = (occurrence.group()).strip('http?://')
+                print occurrence
+                print occurrence_
+                print occurrence.group()
                 patternCollector = "%s__%s__%s_%s" % (
-                                        binlogevent,
-                                        occurrence.group(),
+                                        eventType,
+                                        occurrence_, #.group(),
                                         binlogevent.schema, binlogevent.table,
                                         )
 
@@ -137,12 +144,12 @@ def main():
                                     binlogevent.schema, binlogevent.table,
                                     )
         if patternCollector:
-            if patternGeneralCollector[patternCollector] is None:
+            if patternCollector in patternGeneralCollector.keys():
                 patternGeneralCollector[patternCollector] = 1
             else:
                 patternGeneralCollector[patternCollector] += 1
 
-        if generalCollector[tableCollector]:
+        if tableCollector in generalCollector.keys():
             generalCollector[tableCollector] += 1
         else:
             generalCollector[tableCollector] = 1
@@ -152,9 +159,8 @@ def main():
         else:
             totalOps += 1
 
-        printStats()
         # If interval has been committed, print stats and reset everything
-        if (datetime.today() + timedelta(seconds=OPTIONS["interval"])) > timeCheck:
+        if (datetime.today() + timedelta(seconds=OPTIONS["interval"])) < timeCheck:
             print "Entering line stats at %s " % (timeCheck)
             printStats()
             ## Reset everything to release memory
