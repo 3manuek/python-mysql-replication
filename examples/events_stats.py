@@ -1,6 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""
+## Install pymysqlreplication using pip:
 
+```
+pip install mysql-replication
+```
+
+## Using source
+
+git clone <this repo>
+
+"""
+
+# by Emanuel Calvo "3manuek"
 #
 # Dump all replication events from a remote mysql server
 # and generates statistics per given interval.
@@ -14,15 +27,39 @@
 #    for binlogevent in stream:
 #        if isinstance(binlogevent, QueryEvent):
 #            print binlogevent.query
+#
+# Future applications can be applied in:
+# https://www.percona.com/blog/2016/06/03/binary-logs-make-mysql-5-7-slower-than-5-6/
 
-import re, sys
+"""
+Have fun:
+
+sysbench --test=oltp --mysql-port=22695 --mysql-host=127.0.0.1 \
+  --mysql-user=msandbox --mysql-password=msandbox --mysql-db=test prepare
+
+sysbench --test=oltp --mysql-port=22695 --mysql-host=127.0.0.1 \
+    --mysql-user=msandbox --mysql-password=msandbox --mysql-db=test run
+
+"""
+
+import re, sys,signal #pprint
+from itertools import groupby
+from operator import itemgetter
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
     DeleteRowsEvent,
     UpdateRowsEvent,
     WriteRowsEvent,
 )
-#from datetime import (timedelta, datetime)
+
+from pymysqlreplication.event import (
+    QueryEvent, RotateEvent,BeginLoadQueryEvent, ExecuteLoadQueryEvent
+    #, FormatDescriptionEvent,
+    #XidEvent, GtidEvent, StopEvent,
+    #,NotImplementedEvent
+)
+
+from datetime import datetime 
 import time
 from pudb import set_trace
 
@@ -41,87 +78,118 @@ MYSQL_SETTINGS = {
 # using a database in memory manageable datastore.
 
 OPTIONS = {
-    "interval": 10, # in seconds
+    "interval": 5, # in seconds
     "serverid": 3,
     "log_file": "mysql-bin.000002",
-    "log_pos": 4
+    "log_pos": 48989184
     #"pattern": "http?:\/\/(.*)\s?" # data pattern to search
 }
 
+def signal_handler(signal, frame):
+    #stream.close()
+    sys.exit(0)
 
-# find a way to avoid occurrence.strip('/:')
+def printStats(opsGeneralCollector,patternGeneralCollector,binLogEventSizes,binLogReadBytes,queryStats,rotateStats,loadQueryStats):
+    sorted_input = sorted(opsGeneralCollector, key=itemgetter(0,1))
+    for event, table in groupby(sorted_input, lambda x: x[0]):
+        print "Event: %s " % (event)
+        for table_ in table:
+            table = table_[1]
+            print  "       %s : %s " % (table, opsGeneralCollector[event, table])
 
-def calculateStats():
-    # Top N operation or top 30%/20% ops
-    # Estimate variance
-    # Last 5, 10 , 15 "load average style"
-    countOps = len(opsGeneralCollector)
-    countPatterns = len(patternGeneralCollector)
+    sorted_input = sorted(patternGeneralCollector, key=itemgetter(1))
 
-    patternGeneralCollector = sorted(patternGeneralCollector, reverse = True)
-    opsGeneralCollector = sorted(opsGeneralCollector, reverse = True)
+    for event, groupEvent in groupby(sorted_input, lambda x: x[0] ):
+        print "Event: %s " % (event)
+        for table, groupTables in groupby(groupEvent, lambda x: x[1]):
+            for record in groupTables:
+                print "      %s pattern: %s: %s" % (table,record[2], patternGeneralCollector[record])
 
+    print "Total Ops: %s , W/D/I collected: %s, Pattern matches: %s " % (totalOps,len(opsGeneralCollector),len(patternGeneralCollector))
+    print "Sum binlogevent size %s, read bytes: %s" % (binLogEventSizes, binLogReadBytes)
+    print "Queries: %s  Rotate: %s (Size: %s) Load Queries: %s" % (queryStats['count'],rotateStats['count'],rotateStats['size'],loadQueryStats['count'])
 
-def printStats():
-    # Print Top Operations
-    countTopN = 0
-    topN = 10
-    for key in opsGeneralCollector:
-        countTopN += 1
-        print(key, opsGeneralCollector[key])
-        if countTopN >= topN:
-            break
-
-    countTopN = 0
-    for key in patternGeneralCollector:
-        countTopN += 1
-        print(key, patternGeneralCollector[key])
-        if countTopN >= topN:
-            break
-
-    print "Total ops: %s , Ops collected: %s, Pattern occurrences: %s " % (totalOps,countOps,countPatterns)
+"""
+t={}
+t['s','t','f'] = 1
+for a,b in groupby(t, lambda x: x[0]):
+        for c,d in groupby(b, lambda x: x[1]):
+            for e in d:
+                print a,c,t[e],e[1]
+"""
 
 
 def main():
+    signal.signal(signal.SIGINT, signal_handler)
     global patternGeneralCollector
     global opsGeneralCollector
     global totalOps # Reset on each interval
     global countOps
     global countPatterns
     global patternC
-    #global generalCollector
+    global binLogEventSizes
+    global binLogReadBytes
+
     patternGeneralCollector = {}
     opsGeneralCollector = {}
-    #generalCollector = {}
+    queryStats = {}
+    rotateStats = {}
+    loadQueryStats = {}
     totalOps = 0 # Reset on each interval
     countOps = 0
     countPatterns = 0
     prevTimeFlag = 0
+    binLogEventSizes = 0
+    binLogReadBytes = 0
+    queryStats['count'] = 0
+    rotateStats['count'] = 0
+    rotateStats['size'] = 0
+    loadQueryStats['count'] = 0
+    firstRun = 1
+
 
     # Great resource http://blog.mattheworiordan.com/post/13174566389/url-regular-expression-for-links-with-or-without
-    patternC = re.compile(r'http?:\/\/(?:[A-Za-z0-9\.\-]+)')
+    patternC = re.compile(r'[A-Za-z]{3,9}:\/\/(?:[A-Za-z0-9\.\-]+)')
 
     # server_id is your slave identifier, it should be unique.
     # set blocking to True if you want to block and wait for the next event at
     # the end of the stream
     #timeCheck = datetime.today()  # If event is bigger, sets it to now() and prints stats.
     timeCheck = time.time()
-    print "Starting at %s " % (timeCheck)
+    #print "Starting at %s " % (timeCheck)
     # We always want to use MASTER_AUTO_POSITION = 1
     # Only events help us to keep the stream shorter as we can.
     stream = BinLogStreamReader(connection_settings=MYSQL_SETTINGS,
                                 server_id=OPTIONS["serverid"],
                                 log_file=OPTIONS["log_file"],
+                                log_pos=OPTIONS["log_pos"],
+                                resume_stream= True, # If no log_pos, set to False
                                 #auto_position=1,
                                 blocking=True,
-                                only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent])
+                                only_events=[DeleteRowsEvent, WriteRowsEvent, UpdateRowsEvent,QueryEvent, RotateEvent,BeginLoadQueryEvent, ExecuteLoadQueryEvent])
+
 
     for binlogevent in stream:
         patternCollector = None
         occurrence = None
-        if prevTimeFlag == 0:
-            txTimeCheck = binlogevent.timestamp
-            prevTimeFlag = 1
+        #if prevTimeFlag == 0:
+        #    txTimeCheck = binlogevent.timestamp
+        #    prevTimeFlag = 1
+
+        if firstRun == 1:
+            print "Binlog: %s Position: %s First Event TS: %s " % (OPTIONS["log_file"],OPTIONS["log_pos"], datetime.fromtimestamp(timeCheck))
+            firstRun = 0
+
+        if isinstance(binlogevent,QueryEvent):
+            queryStats['count'] += 1
+            continue
+        elif isinstance(binlogevent,RotateEvent):
+            rotateStats['count'] += 1
+            rotateStats['size'] += binlogevent.event_size
+            continue
+        elif isinstance(binlogevent,ExecuteLoadQueryEvent) or isinstance(binlogevent,BeginLoadQueryEvent):
+            loadQueryStats['count'] +=1
+            continue
 
         for row in binlogevent.rows:
             if isinstance(binlogevent, DeleteRowsEvent):
@@ -134,47 +202,48 @@ def main():
                 vals = row["values"]
                 eventType = "insert"
 
+            prefix = "%s.%s" %( binlogevent.schema, binlogevent.table)
+            if (eventType, prefix) in opsGeneralCollector:
+                opsGeneralCollector[eventType,prefix] += 1
+            else:
+                opsGeneralCollector[eventType,prefix] = 1
+
             occurrence = re.search(patternC, str(vals) )
             if  occurrence:
-                occurrence_ = (occurrence.group()).strip('http?://')
-                patternCollector = "%s__%s__%s_%s" % (
-                                        eventType,
-                                        occurrence_, #.group(),
-                                        binlogevent.schema, binlogevent.table,
-                                        )
+                occurrence = re.sub('[A-Za-z]{3,9}:\/\/','',occurrence.group())
+                if (eventType,prefix,occurrence) in patternGeneralCollector.keys():
+                    patternGeneralCollector[eventType,prefix,occurrence] += 1
+                else:
+                    patternGeneralCollector[eventType,prefix,occurrence] = 1
 
-            tableCollector = "%s__g__%s_%s" % (
-                                    eventType,
-                                    binlogevent.schema, binlogevent.table,
-                                    )
+            totalOps += 1
 
-        if patternCollector:
-            if patternCollector in patternGeneralCollector.keys():
-                patternGeneralCollector[patternCollector] += 1
-            else:
-                patternGeneralCollector[patternCollector] = 1
-
-        if tableCollector in opsGeneralCollector.keys():
-            opsGeneralCollector[tableCollector] += 1
-            #countOps += 1
-        else:
-            opsGeneralCollector[tableCollector] = 1
-            #countOps += 1
-
-        totalOps += 1
+        binLogEventSizes += binlogevent.event_size
+        binLogReadBytes += binlogevent.packet.read_bytes
 
         # If interval has been committed, print stats and reset everything
-        if (timeCheck + OPTIONS["interval"]) < time.time() or txTimeCheck + OPTIONS["interval"] > time.time():
-            #print "Entering line stats at %s " % (timeCheck)
-            #calculateStats()
-            printStats()
-            ## Reset everything to release memory
+        if (timeCheck + OPTIONS["interval"]) < time.time():
+            #or txTimeCheck + OPTIONS["interval"] > time.time():
+            printStats(opsGeneralCollector, \
+                       patternGeneralCollector, \
+                       binLogEventSizes, \
+                       binLogReadBytes, \
+                       queryStats,\
+                       rotateStats,\
+                       loadQueryStats)
+            # Reset everything to release memory
             totalOps = 0
             patternGeneralCollector = {}
-            generalCollector = {}
+            opsGeneralCollector = {}
+            queryStats['count'] = 0
+            rotateStats['count'] = 0
+            rotateStats['size'] = 0
+            loadQueryStats['count'] = 0
             timeCheck = time.time()
-            #txTimeCheck = binlogevent.timestamp
             prevTimeFlag = 0
+            binLogEventSizes = 0
+            binLogReadBytes = 0
+            firstRun = 0
 
     stream.close()
 
